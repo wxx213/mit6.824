@@ -17,9 +17,11 @@ package raft
 //   in the same server.
 //
 
-import "sync"
-import "sync/atomic"
-import "../labrpc"
+import (
+	"com.example.mit6_824/src/labrpc"
+	"sync"
+	"sync/atomic"
+)
 
 // import "bytes"
 // import "../labgob"
