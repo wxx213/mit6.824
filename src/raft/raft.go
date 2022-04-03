@@ -317,7 +317,22 @@ func sendRequestVoteRPC(rf *Raft, server int, grantNum *int32, ch chan bool) {
 	close(ch)
 }
 
-func sendAppendEntryRPC(rf *Raft, server int, failedNum *int32, ch chan bool) {
+func sendRequestVoteToPeers(rf *Raft, grantNum *int32) {
+	doneCh := make([]chan bool, len(rf.peers))
+	for i, _ := range rf.peers {
+		doneCh[i] = make(chan bool)
+		if i == rf.me {
+			close(doneCh[i])
+			continue
+		}
+		go sendRequestVoteRPC(rf, i, grantNum, doneCh[i])
+	}
+	for _,ch := range doneCh {
+		<-ch
+	}
+}
+
+func sendHeartbeatRPC(rf *Raft, server int, failedNum *int32, ch chan bool) {
 	args := &AppendEntriesArgs{
 		TERM: rf.currentTerm,
 		LEADERID: rf.me,
@@ -341,6 +356,20 @@ func sendAppendEntryRPC(rf *Raft, server int, failedNum *int32, ch chan bool) {
 	close(ch)
 }
 
+func sendHeartbeatToPeers(rf *Raft, failedNum *int32) {
+	doneCh := make([]chan bool, len(rf.peers))
+	for i,_ := range rf.peers {
+		doneCh[i] = make(chan bool)
+		if i == rf.me {
+			close(doneCh[i])
+			continue
+		}
+		go sendHeartbeatRPC(rf, i, failedNum, doneCh[i])
+	}
+	for _,ch := range doneCh {
+		<-ch
+	}
+}
 //
 // the service or tester wants to create a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this
@@ -392,37 +421,15 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			var peerNum int32 = int32(len(rf.peers))
 			rf.mu.Unlock()
 			var grantedNum int32 = 1
-			doneCh := make([]chan bool, len(rf.peers))
 			DPrintf("node %d start election, new election timeoutms: %d", rf.me, timeOut)
-			for i, _ := range rf.peers {
-				doneCh[i] = make(chan bool)
-				if i == rf.me {
-					close(doneCh[i])
-					continue
-				}
-				go sendRequestVoteRPC(rf, i, &grantedNum, doneCh[i])
-			}
-			for _,ch := range doneCh {
-				<-ch
-			}
+			sendRequestVoteToPeers(rf, &grantedNum)
 			if grantedNum >= (peerNum/2 + 1) {
 				DPrintf("node %d get vote from most node, term: %d", rf.me, rf.currentTerm)
 				rf.mu.Lock()
 				rf.roleState = Leader
 				rf.mu.Unlock()
-				doneCh2 := make([]chan bool, len(rf.peers))
 				var failNum int32 = 0
-				for i,_ := range rf.peers {
-					doneCh2[i] = make(chan bool)
-					if i == rf.me {
-						close(doneCh2[i])
-						continue
-					}
-					go sendAppendEntryRPC(rf, i, &failNum, doneCh2[i])
-				}
-				for _,ch := range doneCh {
-					<-ch
-				}
+				sendHeartbeatToPeers(rf, &failNum)
 			} else {
 				DPrintf("node %d lost vote, term: %d", rf.me, rf.currentTerm)
 			}
@@ -442,18 +449,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			rf.mu.Unlock()
 			var failNum int32 = 0
 			var peerNum int32 = int32(len(rf.peers))
-			doneCh := make([]chan bool, len(rf.peers))
-			for i,_ := range rf.peers {
-				doneCh[i] = make(chan bool)
-				if i == rf.me {
-					close(doneCh[i])
-					continue
-				}
-				go sendAppendEntryRPC(rf, i, &failNum, doneCh[i])
-			}
-			for _,ch := range doneCh {
-				<-ch
-			}
+			sendHeartbeatToPeers(rf, &failNum)
 			// lost sync with most of nodes, change to be a follower
 			if failNum >= (peerNum/2 + 1) {
 				DPrintf("leader %d lost sync with most of nodes, change to be a follower", rf.me)
