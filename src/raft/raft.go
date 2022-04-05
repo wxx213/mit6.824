@@ -346,8 +346,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Unlock()
 
 	if isLeader == true {
-		var failedNum int32 = 1
-		sendAppendEntryToPeers(rf, &failedNum)
+		sendAppendEntryToPeers(rf)
 	}
 
 	return index, term, isLeader
@@ -422,7 +421,7 @@ func sendRequestVoteToPeers(rf *Raft, grantNum *int32) {
 	}
 }
 
-func sendAppendEntryRPC(rf *Raft, server int, failedNum *int32, ch chan bool) {
+func sendAppendEntryRPC(rf *Raft, server int, rpcFailed *int32, netFailed *int32, ch chan bool) {
 	rf.mu.Lock()
 	args := &AppendEntriesArgs{
 		TERM:         rf.currentTerm,
@@ -452,43 +451,51 @@ func sendAppendEntryRPC(rf *Raft, server int, failedNum *int32, ch chan bool) {
 	case sendOk := <-doneCh:
 		if sendOk == false {
 			DPrintf("leader %d lost connection with node %d", rf.me, server)
-			atomic.AddInt32(failedNum, 1)
+			atomic.AddInt32(netFailed, 1)
 		} else if reply.SUCCESS == false {
 			DPrintf("leader %d send append entry rpc failed to node %d", rf.me, server)
 			if rf.nextIndex[server] > 1 {
 				rf.nextIndex[server]--
 			}
-			atomic.AddInt32(failedNum, 1)
+			atomic.AddInt32(rpcFailed, 1)
 		} else {
 			DPrintf("leader %d send append entry rpc success to node %d", rf.me, server)
 			rf.nextIndex[server] += len(args.ENTRIES)
 		}
 	case <-time.After(RPCTtimeout):
 		DPrintf("leader %d connection with node %d timeout", rf.me, server)
-		atomic.AddInt32(failedNum, 1)
+		atomic.AddInt32(netFailed, 1)
 	}
 	rf.mu.Unlock()
 	close(ch)
 }
 
-func sendAppendEntryToPeers(rf *Raft, failedNum *int32) {
+/*
+return:
+	first, rpc request failed number
+	second, network failed number
+ */
+func sendAppendEntryToPeers(rf *Raft) (int32, int32) {
 	doneCh := make([]chan bool, len(rf.peers))
+	var rpcFailed int32 = 0
+	var netFailed int32 = 0
 	for i,_ := range rf.peers {
 		doneCh[i] = make(chan bool)
 		if i == rf.me {
 			close(doneCh[i])
 			continue
 		}
-		go sendAppendEntryRPC(rf, i, failedNum, doneCh[i])
+		go sendAppendEntryRPC(rf, i, &rpcFailed, &netFailed, doneCh[i])
 	}
 	for _,ch := range doneCh {
 		<-ch
 	}
 	rf.mu.Lock()
-	if int(*failedNum) < (len(rf.peers)/2 + 1) {
+	if int(rpcFailed + netFailed) < (len(rf.peers)/2 + 1) {
 		rf.commitIndex = rf.logIndex
 	}
 	rf.mu.Unlock()
+	return rpcFailed, netFailed
 }
 
 //
@@ -559,8 +566,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				rf.mu.Lock()
 				rf.roleState = Leader
 				rf.mu.Unlock()
-				var failNum int32 = 0
-				sendAppendEntryToPeers(rf, &failNum)
+				sendAppendEntryToPeers(rf)
 			} else {
 				DPrintf("node %d lost vote, term: %d", rf.me, rf.currentTerm)
 			}
@@ -571,6 +577,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go func() {
 		for {
 			time.Sleep(Hearteatperiod)
+directly_append:
 			rf.mu.Lock()
 			if rf.roleState != Leader {
 				rf.mu.Unlock()
@@ -578,15 +585,16 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			}
 			DPrintf("leader %d sending append entry", rf.me)
 			rf.mu.Unlock()
-			var failNum int32 = 0
 			var peerNum int32 = int32(len(rf.peers))
-			sendAppendEntryToPeers(rf, &failNum)
+			rpcFailed, netFailed := sendAppendEntryToPeers(rf)
 			// lost sync with most of nodes, change to be a follower
-			if failNum >= (peerNum/2 + 1) {
-				DPrintf("leader %d lost sync with most of nodes, change to be a follower", rf.me)
+			if netFailed >= (peerNum/2 + 1) {
+				DPrintf("leader %d lost connection with most of nodes, change to be a follower", rf.me)
 				rf.mu.Lock()
 				rf.roleState = Follwer
 				rf.mu.Unlock()
+			} else if rpcFailed+netFailed >= (peerNum/2 + 1) {
+				goto directly_append
 			}
 		}
 	}()
