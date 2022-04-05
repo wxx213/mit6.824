@@ -1,18 +1,34 @@
-# Introduction
+# 介绍
 
-Labs for [mit6.824](http://nil.csail.mit.edu/6.824/2020/schedule.html)
+[mit6.824](http://nil.csail.mit.edu/6.824/2020/schedule.html) 课程的Lab代码
 
-# debug
+原始的代码仓库地址
 
-add some extra code to debug
+```
+git://g.csail.mit.edu/6.824-golabs-2020
+```
 
-set log
+# Raft
+
+网页地址：http://nil.csail.mit.edu/6.824/2020/labs/lab-raft.html
+
+## 基本概念
+
+### 日志复制
+
+日志提交(commit)：for follower, 日志已经被保存到了本地日志序列；for leader, 日志已经被大部分节点复制
+
+日志应用(apply)：日志（作为元数据）已经被应用到了本地状态机（本地存储系统）
+
+## 调试
+
+设置日志可以显示行号和毫秒时间戳
 
 ```go
 log.SetFlags(log.Lshortfile | log.LstdFlags | log.Lmicroseconds)
 ```
 
-print node info
+打印节点角色信息
 
 ```go
 // for debug, print node role
