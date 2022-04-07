@@ -195,11 +195,17 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 				return
 			}
 		}
-		rf.votedFor = args.CANDIDATEID
-		rf.currentTerm = args.TERM
-		rf.roleState = Follwer
-		reply.TERM = rf.currentTerm
-		reply.VOTEGRANTED = true
+		if rf.votedFor == -1 || rf.votedFor == args.CANDIDATEID {
+			DPrintf("node %d voted for %d, change state %d to a follower", rf.me, args.CANDIDATEID, rf.roleState)
+			rf.votedFor = args.CANDIDATEID
+			rf.currentTerm = args.TERM
+			rf.roleState = Follwer
+			reply.TERM = rf.currentTerm
+			reply.VOTEGRANTED = true
+		} else {
+			reply.TERM = rf.currentTerm
+			reply.VOTEGRANTED = false
+		}
 	} else {
 		reply.TERM = rf.currentTerm
 		reply.VOTEGRANTED = false
@@ -278,9 +284,6 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		reply.SUCCESS = false
 		reply.TERM = rf.currentTerm
 	} else {
-		rf.heartbeatReceived = true
-		rf.currentTerm = args.TERM
-		rf.roleState = Follwer
 		if len(args.ENTRIES) > 0 {
 			if findLogEntry(rf, args.PREVLOGINDEX, args.PREVLOGTERM) == true {
 				if len(rf.log) > args.PREVLOGINDEX {
@@ -301,6 +304,15 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			}
 			reply.SUCCESS = true
 			reply.TERM = rf.currentTerm
+		}
+	}
+	if reply.SUCCESS == true {
+		rf.heartbeatReceived = true
+		rf.currentTerm = args.TERM
+		rf.votedFor = -1
+		if rf.roleState != Follwer {
+			DPrintf("node %d received append entry rpc from leader %d, change to be a follower", rf.me, args.LEADERID)
+			rf.roleState = Follwer
 		}
 	}
 	rf.mu.Unlock()
@@ -459,7 +471,6 @@ func sendAppendEntryRPC(rf *Raft, server int, rpcFailed *int32, netFailed *int32
 			}
 			atomic.AddInt32(rpcFailed, 1)
 		} else {
-			DPrintf("leader %d send append entry rpc success to node %d", rf.me, server)
 			rf.nextIndex[server] += len(args.ENTRIES)
 		}
 	case <-time.After(RPCTtimeout):
@@ -570,6 +581,10 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			} else {
 				DPrintf("node %d lost vote, term: %d", rf.me, rf.currentTerm)
 			}
+			// reset vote for next election
+			rf.mu.Lock()
+			rf.votedFor = -1
+			rf.mu.Unlock()
 		}
 	}()
 
@@ -583,7 +598,6 @@ directly_append:
 				rf.mu.Unlock()
 				continue
 			}
-			DPrintf("leader %d sending append entry", rf.me)
 			rf.mu.Unlock()
 			var peerNum int32 = int32(len(rf.peers))
 			rpcFailed, netFailed := sendAppendEntryToPeers(rf)

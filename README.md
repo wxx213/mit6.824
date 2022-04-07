@@ -31,18 +31,25 @@ log.SetFlags(log.Lshortfile | log.LstdFlags | log.Lmicroseconds)
 打印节点角色信息
 
 ```go
+func stack() string {
+	var buf [2 << 10]byte
+	return string(buf[:runtime.Stack(buf[:], false)])
+}
+
 // for debug, print node role
 func checkrole(cfg *config) {
 	var term int
 	var isleader bool
 
 	log.Println("start checkrole")
-	fmt.Println("server term isleader electiontimeoutms role connected")
+	fmt.Println("server term isleader electiontimeoutms role connected logindex commitindex nextIndex")
 	for i:=0;i<cfg.n;i++ {
 		term, isleader = cfg.rafts[i].GetState()
 		fmt.Println(i,"    ",term,"  ",isleader,"   ",cfg.rafts[i].electiontimeoutms,
-			"             ",cfg.rafts[i].roleState,"    ", cfg.connected[i])
+			"             ",cfg.rafts[i].roleState,"    ", cfg.connected[i],
+			"    ",cfg.rafts[i].logIndex, "", cfg.rafts[i].commitIndex, "  ", cfg.rafts[i].nextIndex)
 	}
+	log.Println("stack: ", stack())
 }
 ```
 
