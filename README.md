@@ -22,6 +22,8 @@ git://g.csail.mit.edu/6.824-golabs-2020
 
 ## 调试
 
+### 日志打印
+
 设置日志可以显示行号和毫秒时间戳
 
 ```go
@@ -42,14 +44,38 @@ func checkrole(cfg *config) {
 	var isleader bool
 
 	log.Println("start checkrole")
-	fmt.Println("server term isleader electiontimeoutms role connected logindex commitindex nextIndex")
+	fmt.Println("server term isleader electiontimeoutms role connected logindex commitindex applylogs nextIndex")
 	for i:=0;i<cfg.n;i++ {
 		term, isleader = cfg.rafts[i].GetState()
 		fmt.Println(i,"    ",term,"  ",isleader,"   ",cfg.rafts[i].electiontimeoutms,
 			"             ",cfg.rafts[i].roleState,"    ", cfg.connected[i],
-			"    ",cfg.rafts[i].logIndex, "", cfg.rafts[i].commitIndex, "  ", cfg.rafts[i].nextIndex)
+			"    ",cfg.rafts[i].logIndex, "", cfg.rafts[i].commitIndex, "    ", len(cfg.logs[i]), "    ", cfg.rafts[i].nextIndex)
 	}
 	log.Println("stack: ", stack())
 }
 ```
 
+### panic调试
+
+1. 配置core文件大小
+
+   ```
+   ulimit -c unlimite
+   ```
+
+2. 设置golang程序在panic时生成core，添加环境变量
+
+   ```
+   GOTRACEBACK=crash
+   ```
+
+3. 修改go test执行方法
+
+   ```shell
+   # 只编译不执行，生成可执行文件raft.test
+   go test -c
+   # 执行特定的测试
+   ./raft.test -test.run $test
+   ```
+
+   ​

@@ -1,6 +1,9 @@
 package raft
 
-import "log"
+import (
+	"log"
+	"sort"
+)
 
 // Debugging
 const Debug = 0
@@ -17,4 +20,15 @@ func minIndex(a int, b int) int {
 		return a
 	}
 	return b
+}
+
+func findNthMinIndex(index []int, n int) int {
+	if len(index) == 0 {
+		return 0
+	}
+	if len(index) <= n {
+		return 0
+	}
+	sort.Ints(index)
+	return index[n]
 }

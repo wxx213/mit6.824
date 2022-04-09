@@ -18,7 +18,10 @@ package raft
 //
 
 import (
+	"bytes"
+	"com.example.mit6_824/src/labgob"
 	"com.example.mit6_824/src/labrpc"
+	"log"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -83,10 +86,10 @@ type Raft struct {
 
 	// volatile state for all servers
 	roleState int
-	logIndex int
+	logIndex int // start from 1
 	// in paper
-	commitIndex int
-	lastApplied int
+	commitIndex int  // start from 1
+	lastApplied int  // start from 1
 
 	// volatile state for leader in paper
 	nextIndex []int
@@ -120,6 +123,7 @@ func (rf *Raft) GetState() (int, bool) {
 // where it can later be retrieved after a crash and restart.
 // see paper's Figure 2 for a description of what should be persistent.
 //
+//lock is needed before call this function
 func (rf *Raft) persist() {
 	// Your code here (2C).
 	// Example:
@@ -129,6 +133,14 @@ func (rf *Raft) persist() {
 	// e.Encode(rf.yyy)
 	// data := w.Bytes()
 	// rf.persister.SaveRaftState(data)
+
+	writer := new(bytes.Buffer)
+	encoder := labgob.NewEncoder(writer)
+	encoder.Encode(rf.currentTerm)
+	encoder.Encode(rf.votedFor)
+	encoder.Encode(rf.log)
+	data := writer.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 
@@ -152,6 +164,23 @@ func (rf *Raft) readPersist(data []byte) {
 	//   rf.xxx = xxx
 	//   rf.yyy = yyy
 	// }
+	reader := bytes.NewBuffer(data)
+	decoder := labgob.NewDecoder(reader)
+	var currentTerm int
+	var votedFor int
+	var logEntry[]LogEntry
+	if decoder.Decode(&currentTerm) != nil ||
+		decoder.Decode(&votedFor) != nil ||
+		decoder.Decode(&logEntry) != nil {
+		log.Printf("node %d read persist error", rf.me)
+		return
+	}
+	rf.mu.Lock()
+	rf.currentTerm = currentTerm
+	rf.votedFor = votedFor
+	rf.log = logEntry
+	rf.logIndex = len(rf.log)
+	rf.mu.Unlock()
 }
 
 
@@ -187,9 +216,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	if args.TERM >= rf.currentTerm {
 		if len(rf.log) > 0 {
-			if args.LASTLOGTERM < rf.log[rf.commitIndex-1].TERM ||
-				(args.LASTLOGTERM == rf.log[rf.commitIndex-1].TERM &&
-					args.LASTLOGINDEX < rf.log[rf.commitIndex-1].INDEX) {
+			if args.LASTLOGTERM < rf.log[len(rf.log)-1].TERM ||
+				(args.LASTLOGTERM == rf.log[len(rf.log)-1].TERM &&
+					args.LASTLOGINDEX < rf.log[len(rf.log)-1].INDEX) {
 				reply.VOTEGRANTED = false
 				reply.TERM = rf.currentTerm
 				rf.mu.Unlock()
@@ -204,6 +233,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			rf.roleState = Follwer
 			reply.TERM = rf.currentTerm
 			reply.VOTEGRANTED = true
+			rf.persist()
 		} else {
 			DPrintf("node %d reject vote from %d, the vote already for %d", rf.me, args.CANDIDATEID, rf.votedFor)
 			reply.TERM = rf.currentTerm
@@ -318,6 +348,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			DPrintf("node %d received append entry rpc from leader %d, change to be a follower", rf.me, args.LEADERID)
 			rf.roleState = Follwer
 		}
+		rf.persist()
 	}
 	rf.mu.Unlock()
 }
@@ -358,6 +389,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		}
 		rf.log = append(rf.log, logEntry)
 		index = rf.logIndex
+		rf.persist()
 	}
 	rf.mu.Unlock()
 
@@ -396,8 +428,8 @@ func sendRequestVoteRPC(rf *Raft, server int, grantNum *int32, ch chan bool) {
 	}
 	rf.mu.Lock()
 	if len(rf.log) > 0 {
-		args.LASTLOGINDEX = rf.log[rf.commitIndex-1].INDEX
-		args.LASTLOGTERM = rf.log[rf.commitIndex-1].TERM
+		args.LASTLOGINDEX = rf.log[len(rf.log)-1].INDEX
+		args.LASTLOGTERM = rf.log[len(rf.log)-1].TERM
 	}
 	rf.mu.Unlock()
 	reply := &RequestVoteReply{
@@ -415,6 +447,7 @@ func sendRequestVoteRPC(rf *Raft, server int, grantNum *int32, ch chan bool) {
 		} else {
 			rf.mu.Lock()
 			rf.currentTerm = reply.TERM
+			rf.persist()
 			rf.mu.Unlock()
 		}
 	case <-time.After(RPCTtimeout):
@@ -518,7 +551,10 @@ func sendAppendEntryToPeers(rf *Raft) (int32, int32) {
 	}
 	rf.mu.Lock()
 	if int(rpcFailed + netFailed) < (len(rf.peers)/2 + 1) {
-		rf.commitIndex = rf.logIndex
+		copyIndex := make([]int, len(rf.nextIndex))
+		copy(copyIndex, rf.nextIndex)
+		copyIndex[rf.me] = rf.logIndex+1
+		rf.commitIndex = findNthMinIndex(copyIndex, int(rpcFailed+netFailed))-1
 	}
 	rf.mu.Unlock()
 	return rpcFailed, netFailed
@@ -551,14 +587,18 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.lastApplied = 0
 	rf.nextIndex = make([]int, len(rf.peers))
 	rf.applyCh = applyCh
-	for i:=0;i<len(rf.peers);i++ {
-		rf.nextIndex[i] = 1
-	}
 	rf.matchIndex = make([]int, len(rf.peers))
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
+	var nextIndex int = 1
+	if len(rf.log) > 0 {
+		nextIndex = len(rf.log)+1
+	}
+	for i:=0;i<len(rf.peers);i++ {
+		rf.nextIndex[i] = nextIndex
+	}
 	// goroutine for leader election
 	timeOut := Electiontimeoutbase + (rand.Int63() % Electiontimeoutquota)
 	rf.electiontimeoutms = int(timeOut)
@@ -582,12 +622,14 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			rf.currentTerm++
 			rf.roleState = Candadtite
 			rf.votedFor = rf.me
+			rf.persist()
 			rf.mu.Unlock()
 			DPrintf("node %d start election, new election timeoutms: %d", rf.me, timeOut)
 			sendRequestVoteToPeers(rf)
 			// reset vote for next election
 			rf.mu.Lock()
 			rf.votedFor = -1
+			rf.persist()
 			rf.mu.Unlock()
 		}
 	}()
