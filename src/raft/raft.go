@@ -621,6 +621,7 @@ directly_append:
 	go func() {
 		for {
 			time.Sleep(Logapplyperiod)
+directly_apply:
 			rf.mu.Lock()
 			if rf.commitIndex > rf.lastApplied {
 				rf.lastApplied++
@@ -630,6 +631,8 @@ directly_append:
 					Command: rf.log[rf.lastApplied-1].COMMAND,
 				}
 				rf.applyCh <- msg
+				rf.mu.Unlock()
+				goto directly_apply
 			}
 			rf.mu.Unlock()
 		}
