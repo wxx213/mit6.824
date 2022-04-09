@@ -32,7 +32,8 @@ const (
 	Follwer = 0
 	Candadtite = 1
 	Leader = 2
-	Electiontimeout = 450// time.Millisecond
+	Electiontimeoutbase = 450// time.Millisecond
+	Electiontimeoutquota = 100// time.Millisecond
 	Hearteatperiod = 200 *time.Millisecond
 	RPCTtimeout = 100 * time.Millisecond
 	Logapplyperiod = 150 * time.Millisecond
@@ -192,6 +193,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 				reply.VOTEGRANTED = false
 				reply.TERM = rf.currentTerm
 				rf.mu.Unlock()
+				DPrintf("node %d reject vote from %d, log not new enough", rf.me, args.CANDIDATEID)
 				return
 			}
 		}
@@ -203,10 +205,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			reply.TERM = rf.currentTerm
 			reply.VOTEGRANTED = true
 		} else {
+			DPrintf("node %d reject vote from %d, the vote already for %d", rf.me, args.CANDIDATEID, rf.votedFor)
 			reply.TERM = rf.currentTerm
 			reply.VOTEGRANTED = false
 		}
 	} else {
+		DPrintf("node %d reject vote from %d, the term %d from candidate is too old", rf.me, args.CANDIDATEID, args.TERM)
 		reply.TERM = rf.currentTerm
 		reply.VOTEGRANTED = false
 	}
@@ -418,7 +422,9 @@ func sendRequestVoteRPC(rf *Raft, server int, grantNum *int32, ch chan bool) {
 	close(ch)
 }
 
-func sendRequestVoteToPeers(rf *Raft, grantNum *int32) {
+func sendRequestVoteToPeers(rf *Raft) {
+	var peerNum int32 = int32(len(rf.peers))
+	var grantedNum int32 = 1
 	doneCh := make([]chan bool, len(rf.peers))
 	for i, _ := range rf.peers {
 		doneCh[i] = make(chan bool)
@@ -426,10 +432,19 @@ func sendRequestVoteToPeers(rf *Raft, grantNum *int32) {
 			close(doneCh[i])
 			continue
 		}
-		go sendRequestVoteRPC(rf, i, grantNum, doneCh[i])
+		go sendRequestVoteRPC(rf, i, &grantedNum, doneCh[i])
 	}
 	for _,ch := range doneCh {
 		<-ch
+	}
+	if grantedNum >= (peerNum/2 + 1) {
+		DPrintf("node %d get vote from most node, term: %d", rf.me, rf.currentTerm)
+		rf.mu.Lock()
+		rf.roleState = Leader
+		rf.mu.Unlock()
+		sendAppendEntryToPeers(rf)
+	} else {
+		DPrintf("node %d lost vote, term: %d", rf.me, rf.currentTerm)
 	}
 }
 
@@ -545,7 +560,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.readPersist(persister.ReadRaftState())
 
 	// goroutine for leader election
-	timeOut := Electiontimeout + (rand.Int63() % 100)
+	timeOut := Electiontimeoutbase + (rand.Int63() % Electiontimeoutquota)
 	rf.electiontimeoutms = int(timeOut)
 	DPrintf("node %d init election timeoutms: %d", rf.me, timeOut)
 	go func() {
@@ -562,25 +577,14 @@ func Make(peers []*labrpc.ClientEnd, me int,
 				continue
 			}
 			// heartbeat lost from leader, start the election
-			timeOut = Electiontimeout + (rand.Int63() % 100)
+			timeOut = Electiontimeoutbase + (rand.Int63() % Electiontimeoutquota)
 			rf.electiontimeoutms = int(timeOut)
 			rf.currentTerm++
 			rf.roleState = Candadtite
 			rf.votedFor = rf.me
-			var peerNum int32 = int32(len(rf.peers))
 			rf.mu.Unlock()
-			var grantedNum int32 = 1
 			DPrintf("node %d start election, new election timeoutms: %d", rf.me, timeOut)
-			sendRequestVoteToPeers(rf, &grantedNum)
-			if grantedNum >= (peerNum/2 + 1) {
-				DPrintf("node %d get vote from most node, term: %d", rf.me, rf.currentTerm)
-				rf.mu.Lock()
-				rf.roleState = Leader
-				rf.mu.Unlock()
-				sendAppendEntryToPeers(rf)
-			} else {
-				DPrintf("node %d lost vote, term: %d", rf.me, rf.currentTerm)
-			}
+			sendRequestVoteToPeers(rf)
 			// reset vote for next election
 			rf.mu.Lock()
 			rf.votedFor = -1
