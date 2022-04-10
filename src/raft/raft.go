@@ -443,8 +443,10 @@ func sendRequestVoteRPC(rf *Raft, server int, grantNum *int32, ch chan bool) {
 		doneCh <- ok
 	}()
 	select {
-	case <-doneCh:
-		if reply.VOTEGRANTED == true {
+	case sendOk := <-doneCh:
+		if sendOk == false {
+
+		} else if reply.VOTEGRANTED == true {
 			atomic.AddInt32(grantNum, 1)
 		} else {
 			rf.mu.Lock()
