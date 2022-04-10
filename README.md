@@ -60,7 +60,7 @@ func checkrole(cfg *config) {
 1. 配置core文件大小
 
    ```
-   ulimit -c unlimite
+   ulimit -c unlimited
    ```
 
 2. 设置golang程序在panic时生成core，添加环境变量

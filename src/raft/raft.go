@@ -326,6 +326,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				rf.log = append(rf.log, args.ENTRIES...)
 				rf.logIndex = len(rf.log)
 				rf.commitIndex = minIndex(args.LEADERCOMMIT, rf.log[len(rf.log)-1].INDEX)
+				DPrintf("node %d received log: %+v, new commitIndex: %d", rf.me, args.ENTRIES, rf.commitIndex)
 				reply.SUCCESS = true
 				reply.TERM = rf.currentTerm
 			} else {
@@ -389,6 +390,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		}
 		rf.log = append(rf.log, logEntry)
 		index = rf.logIndex
+		DPrintf("leader %d received new log: %+v, new logIndex: %d", rf.me, logEntry, rf.logIndex)
 		rf.persist()
 	}
 	rf.mu.Unlock()
