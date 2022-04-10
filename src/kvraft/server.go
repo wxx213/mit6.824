@@ -1,10 +1,10 @@
 package kvraft
 
 import (
-	"../labgob"
-	"../labrpc"
+	"com.example.mit6_824/src/labgob"
+	"com.example.mit6_824/src/labrpc"
 	"log"
-	"../raft"
+	"com.example.mit6_824/src/raft"
 	"sync"
 	"sync/atomic"
 )
