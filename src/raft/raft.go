@@ -22,6 +22,7 @@ import (
 	"com.example.mit6_824/src/labgob"
 	"com.example.mit6_824/src/labrpc"
 	"log"
+	"math"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -557,8 +558,11 @@ func sendAppendEntryToPeers(rf *Raft) (int32, int32) {
 	if int(rpcFailed + netFailed) < (len(rf.peers)/2 + 1) {
 		copyIndex := make([]int, len(rf.nextIndex))
 		copy(copyIndex, rf.nextIndex)
-		copyIndex[rf.me] = rf.logIndex+1
-		rf.commitIndex = findNthMinIndex(copyIndex, int(rpcFailed+netFailed))-1
+		copyIndex[rf.me] = math.MaxInt32
+		commitIndex := findNthMinIndex(copyIndex, int(rpcFailed+netFailed))-1
+		if len(rf.log) > 0 && rf.log[commitIndex-1].TERM == rf.currentTerm {
+			rf.commitIndex = commitIndex
+		}
 	}
 	rf.mu.Unlock()
 	return rpcFailed, netFailed
