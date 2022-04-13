@@ -36,8 +36,8 @@ const (
 	Follwer = 0
 	Candadtite = 1
 	Leader = 2
-	Electiontimeoutbase = 450// time.Millisecond
-	Electiontimeoutquota = 100// time.Millisecond
+	Electiontimeoutbase = 250// time.Millisecond
+	Electiontimeoutquota = 300// time.Millisecond
 	Hearteatperiod = 200 *time.Millisecond
 	RPCTtimeout = 100 * time.Millisecond
 	Logapplyperiod = 150 * time.Millisecond
