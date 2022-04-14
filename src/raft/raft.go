@@ -498,8 +498,9 @@ func sendAppendEntryRPC(rf *Raft, server int, rpcFailed *int32, netFailed *int32
 		args.ENTRIES = rf.log[rf.nextIndex[server]-1 : rf.logIndex]
 	}
 	if rf.nextIndex[server] >= 2 {
-		args.PREVLOGINDEX = rf.log[rf.nextIndex[server]-2].INDEX
-		args.PREVLOGTERM = rf.log[rf.nextIndex[server]-2].TERM
+		index := minIndex(rf.nextIndex[server]-2, len(rf.log)-1)
+		args.PREVLOGINDEX = rf.log[index].INDEX
+		args.PREVLOGTERM = rf.log[index].TERM
 	} else {
 		args.PREVLOGINDEX = 0
 		args.PREVLOGTERM = 0
