@@ -58,13 +58,13 @@ func printNodeInfo(cfg *config) {
 		return
 	}
 	log.Println("start printNodeInfo")
-	fmt.Println("server term isleader electiontimeoutms role connected logindex commitindex applylogs  nextIndex        logs")
+	fmt.Println("server term isleader electiontimeoutms role connected logindex commitindex applylogs  matchIndex        logs")
 	for i:=0;i<cfg.n;i++ {
 		term, isleader = cfg.rafts[i].GetState()
 		fmt.Println(i,"    ",term,"  ",isleader,"   ",cfg.rafts[i].electiontimeoutms,
 			"             ",cfg.rafts[i].roleState,"    ", cfg.connected[i],
 			"    ",cfg.rafts[i].logIndex, "       ", cfg.rafts[i].commitIndex, "    ",
-			len(cfg.logs[i]), "     ", cfg.rafts[i].nextIndex, "    ", cfg.rafts[i].log)
+			len(cfg.logs[i]), "     ", cfg.rafts[i].matchIndex, "    ", cfg.rafts[i].log)
 	}
 	log.Println("stack: ", stack())
 }
