@@ -236,6 +236,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			rf.votedFor = args.CANDIDATEID
 			rf.currentTerm = args.TERM
 			rf.roleState = Follwer
+			rf.heartbeatReceived = true
 			reply.TERM = rf.currentTerm
 			reply.VOTEGRANTED = true
 			rf.persist()
@@ -568,11 +569,6 @@ func sendAppendEntryRPC(rf *Raft, server int, rpcFailed *int32, netFailed *int32
 			if rf.nextIndex[server] > 1 {
 				rf.nextIndex[server]--
 			}
-			// increase leader's term to prevent invalid election
-			if rf.currentTerm < reply.TERM {
-				rf.currentTerm = reply.TERM + 2
-				rf.persist()
-			}
 			atomic.AddInt32(rpcFailed, 1)
 		} else {
 			rf.nextIndex[server] += len(args.ENTRIES)
@@ -745,7 +741,7 @@ directly_apply:
 				break
 			}
 			rf.mu.Lock()
-			if rf.commitIndex > rf.lastApplied {
+			if rf.commitIndex > rf.lastApplied && rf.lastApplied < len(rf.log) {
 				rf.lastApplied++
 				msg := ApplyMsg{
 					CommandValid: true,
