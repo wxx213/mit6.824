@@ -192,6 +192,7 @@ func (rf *Raft) readPersist(data []byte) {
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+	TRACEID int
 	TERM int
 	CANDIDATEID int
 	LASTLOGINDEX int
@@ -226,13 +227,13 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 					rf.currentTerm = args.TERM
 				}
 				rf.mu.Unlock()
-				DPrintf("node %d reject vote from %d, log not new enough", rf.me, args.CANDIDATEID)
+				DPrintf("node %d reject vote from %d, log not new enough, traceId: %d", rf.me, args.CANDIDATEID, args.TRACEID)
 				return
 			}
 		}
 		if (rf.votedFor == -1 || rf.votedFor == args.CANDIDATEID) ||
 			args.TERM > rf.currentTerm {
-			DPrintf("node %d voted for %d, change state %d to a follower", rf.me, args.CANDIDATEID, rf.roleState)
+			DPrintf("node %d voted for %d, change state %d to a follower, traceId: %d", rf.me, args.CANDIDATEID, rf.roleState, args.TRACEID)
 			rf.votedFor = args.CANDIDATEID
 			rf.currentTerm = args.TERM
 			rf.roleState = Follwer
@@ -241,12 +242,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 			reply.VOTEGRANTED = true
 			rf.persist()
 		} else {
-			DPrintf("node %d reject vote from %d, the vote already for %d", rf.me, args.CANDIDATEID, rf.votedFor)
+			DPrintf("node %d reject vote from %d, the vote already for %d, traceId: %d", rf.me, args.CANDIDATEID, rf.votedFor, args.TRACEID)
 			reply.TERM = rf.currentTerm
 			reply.VOTEGRANTED = false
 		}
 	} else {
-		DPrintf("node %d reject vote from %d, the candidate term %d is older than current term %d", rf.me, args.CANDIDATEID, args.TERM, rf.currentTerm)
+		DPrintf("node %d reject vote from %d, the candidate term %d is older than current term %d, traceId: %d", rf.me, args.CANDIDATEID, args.TERM, rf.currentTerm, args.TRACEID)
 		reply.TERM = rf.currentTerm
 		reply.VOTEGRANTED = false
 	}
@@ -289,6 +290,7 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 
 
 type AppendEntriesArgs struct {
+	TRACEID int
 	TERM int
 	LEADERID int
 	PREVLOGINDEX int
@@ -321,7 +323,7 @@ func findLogEntry(rf *Raft, index int, term int) bool {
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	rf.mu.Lock()
 	if args.TERM < rf.currentTerm {
-		DPrintf("node %d reject append entry rpc from %d, leader term %d older than current term %d", rf.me, args.LEADERID, args.TERM, rf.currentTerm)
+		DPrintf("node %d reject append entry rpc from %d, leader term %d older than current term %d, traceId: %d", rf.me, args.LEADERID, args.TERM, rf.currentTerm, args.TRACEID)
 		reply.SUCCESS = false
 		reply.TERM = rf.currentTerm
 	} else {
@@ -345,11 +347,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 				if args.LEADERCOMMIT > rf.commitIndex {
 					rf.commitIndex = minIndex(args.LEADERCOMMIT, rf.log[len(rf.log)-1].INDEX)
 				}
-				DPrintf("node %d received log: %+v, new commitIndex: %d", rf.me, args.ENTRIES, rf.commitIndex)
+				DPrintf("node %d received log: %+v, new commitIndex: %d, traceId: %d", rf.me, args.ENTRIES, rf.commitIndex, args.TRACEID)
 				reply.SUCCESS = true
 				reply.TERM = rf.currentTerm
 			} else {
-				DPrintf("node %d reject append entry rpc from %d, leader prev log, index: %d, term: %d not found", rf.me, args.LEADERID, args.PREVLOGINDEX, args.PREVLOGTERM)
+				DPrintf("node %d reject append entry rpc from %d, leader prev log, index: %d, term: %d not found, traceId: %d", rf.me, args.LEADERID, args.PREVLOGINDEX, args.PREVLOGTERM, args.TRACEID)
 				reply.SUCCESS = false
 				reply.TERM = rf.currentTerm
 			}
@@ -368,7 +370,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.currentTerm = args.TERM
 		rf.votedFor = -1
 		if rf.roleState != Follwer {
-			DPrintf("node %d received append entry rpc from leader %d, change to be a follower", rf.me, args.LEADERID)
+			DPrintf("node %d received append entry rpc from leader %d, change to be a follower, traceId: %d", rf.me, args.LEADERID, args.TRACEID)
 			rf.roleState = Follwer
 		}
 		rf.persist()
@@ -446,9 +448,11 @@ func (rf *Raft) killed() bool {
 }
 
 func sendRequestVoteRPC(rf *Raft, server int, grantNum *int32, netFailed *int32, ch chan bool) {
+	traceId := rand.Int()
 	args := &RequestVoteArgs{
 		TERM: rf.currentTerm,
 		CANDIDATEID: rf.me,
+		TRACEID: traceId,
 	}
 	rf.mu.Lock()
 	if len(rf.log) > 0 {
@@ -468,7 +472,7 @@ func sendRequestVoteRPC(rf *Raft, server int, grantNum *int32, netFailed *int32,
 	case sendOk := <-doneCh:
 		if sendOk == false {
 			atomic.AddInt32(netFailed, 1)
-			DPrintf("node %d send vote request rpc to %d net failed", rf.me, server)
+			DPrintf("node %d send vote request rpc to %d net failed, traceId: %d", rf.me, server, traceId)
 		} else if reply.VOTEGRANTED == true {
 			atomic.AddInt32(grantNum, 1)
 		} else {
@@ -484,7 +488,7 @@ func sendRequestVoteRPC(rf *Raft, server int, grantNum *int32, netFailed *int32,
 		}
 	case <-time.After(RPCTtimeout):
 		atomic.AddInt32(netFailed, 1)
-		DPrintf("node %d send vote request rpc to %d timeout", rf.me, server)
+		DPrintf("node %d send vote request rpc to %d timeout, traceId: %d", rf.me, server, traceId)
 	}
 	close(ch)
 }
@@ -530,12 +534,14 @@ func sendRequestVoteToPeers(rf *Raft) {
 
 func sendAppendEntryRPC(rf *Raft, server int, rpcFailed *int32, netFailed *int32, ch chan bool) {
 	success := false
+	traceId := rand.Int()
 
 	rf.mu.Lock()
 	args := &AppendEntriesArgs{
 		TERM:         rf.currentTerm,
 		LEADERID:     rf.me,
 		LEADERCOMMIT: rf.commitIndex,
+		TRACEID: traceId,
 	}
 
 	if rf.logIndex >= rf.nextIndex[server] {
@@ -562,10 +568,10 @@ func sendAppendEntryRPC(rf *Raft, server int, rpcFailed *int32, netFailed *int32
 	select {
 	case sendOk := <-doneCh:
 		if sendOk == false {
-			DPrintf("leader %d lost connection with node %d", rf.me, server)
+			DPrintf("leader %d lost connection with node %d, traceId: %d", rf.me, server, traceId)
 			atomic.AddInt32(netFailed, 1)
 		} else if reply.SUCCESS == false {
-			DPrintf("leader %d send append entry rpc failed to node %d", rf.me, server)
+			DPrintf("leader %d send append entry rpc failed to node %d, traceId: %d", rf.me, server, traceId)
 			if rf.nextIndex[server] > 1 {
 				rf.nextIndex[server]--
 			}
@@ -576,7 +582,7 @@ func sendAppendEntryRPC(rf *Raft, server int, rpcFailed *int32, netFailed *int32
 			success = true
 		}
 	case <-time.After(RPCTtimeout):
-		DPrintf("leader %d connection with node %d timeout", rf.me, server)
+		DPrintf("leader %d connection with node %d timeout, traceId: %d", rf.me, server, traceId)
 		atomic.AddInt32(netFailed, 1)
 	}
 	rf.mu.Unlock()
