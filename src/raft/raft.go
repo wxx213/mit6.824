@@ -560,6 +560,7 @@ func sendAppendEntryRPC(rf *Raft, server int, rpcFailed *int32, netFailed *int32
 	reply := &AppendEntriesReply{
 		SUCCESS: false,
 	}
+	rf.mu.Unlock()
 	doneCh := make(chan bool)
 	go func() {
 		ok := rf.sendAppendEntries(server, args, reply)
@@ -567,6 +568,7 @@ func sendAppendEntryRPC(rf *Raft, server int, rpcFailed *int32, netFailed *int32
 	}()
 	select {
 	case sendOk := <-doneCh:
+		rf.mu.Lock()
 		if sendOk == false {
 			DPrintf("leader %d lost connection with node %d, traceId: %d", rf.me, server, traceId)
 			atomic.AddInt32(netFailed, 1)
@@ -581,11 +583,11 @@ func sendAppendEntryRPC(rf *Raft, server int, rpcFailed *int32, netFailed *int32
 			rf.matchIndex[server] = rf.nextIndex[server]-1
 			success = true
 		}
+		rf.mu.Unlock()
 	case <-time.After(RPCTtimeout):
 		DPrintf("leader %d connection with node %d timeout, traceId: %d", rf.me, server, traceId)
 		atomic.AddInt32(netFailed, 1)
 	}
-	rf.mu.Unlock()
 	ch <- success
 }
 
