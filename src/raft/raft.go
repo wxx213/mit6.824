@@ -454,12 +454,12 @@ func sendRequestVoteRPC(rf *Raft, server int, grantNum *int32, netFailed *int32,
 		CANDIDATEID: rf.me,
 		TRACEID: traceId,
 	}
-	rf.mu.Lock()
+
 	if len(rf.log) > 0 {
 		args.LASTLOGINDEX = rf.log[len(rf.log)-1].INDEX
 		args.LASTLOGTERM = rf.log[len(rf.log)-1].TERM
 	}
-	rf.mu.Unlock()
+
 	reply := &RequestVoteReply{
 		VOTEGRANTED: false,
 	}
@@ -494,6 +494,7 @@ func sendRequestVoteRPC(rf *Raft, server int, grantNum *int32, netFailed *int32,
 }
 
 func sendRequestVoteToPeers(rf *Raft) {
+	rf.mu.Lock()
 	var peerNum int32 = int32(len(rf.peers))
 	var grantedNum int32 = 1
 	var netFailed int32 = 0
@@ -509,8 +510,8 @@ func sendRequestVoteToPeers(rf *Raft) {
 	for _,ch := range doneCh {
 		<-ch
 	}
+	needSendAppentEntry := false
 	if grantedNum >= (peerNum/2 + 1) {
-		rf.mu.Lock()
 		// check if node voted for other node in waiting for rpc
 		if rf.roleState != Candadtite {
 			rf.mu.Unlock()
@@ -518,25 +519,26 @@ func sendRequestVoteToPeers(rf *Raft) {
 		}
 		DPrintf("node %d get vote from most node, term: %d", rf.me, rf.currentTerm)
 		rf.roleState = Leader
-		rf.mu.Unlock()
-		sendAppendEntryToPeers(rf)
+		needSendAppentEntry = true
 	} else {
-		rf.mu.Lock()
 		if netFailed >= (peerNum/2 + 1) {
 			DPrintf("node %d lost vote because network loss, term: %d, restore invalid term increment", rf.me, rf.currentTerm)
 			rf.currentTerm--
 		} else {
 			DPrintf("node %d lost vote, term: %d", rf.me, rf.currentTerm)
 		}
-		rf.mu.Unlock()
+	}
+	rf.mu.Unlock()
+	if needSendAppentEntry == true {
+		sendAppendEntryToPeers(rf)
 	}
 }
 
+// need Raft lock outside
 func sendAppendEntryRPC(rf *Raft, server int, rpcFailed *int32, netFailed *int32, ch chan bool) {
 	success := false
 	traceId := rand.Int()
 
-	rf.mu.Lock()
 	args := &AppendEntriesArgs{
 		TERM:         rf.currentTerm,
 		LEADERID:     rf.me,
@@ -560,7 +562,7 @@ func sendAppendEntryRPC(rf *Raft, server int, rpcFailed *int32, netFailed *int32
 	reply := &AppendEntriesReply{
 		SUCCESS: false,
 	}
-	rf.mu.Unlock()
+
 	doneCh := make(chan bool)
 	go func() {
 		ok := rf.sendAppendEntries(server, args, reply)
@@ -568,7 +570,6 @@ func sendAppendEntryRPC(rf *Raft, server int, rpcFailed *int32, netFailed *int32
 	}()
 	select {
 	case sendOk := <-doneCh:
-		rf.mu.Lock()
 		if sendOk == false {
 			DPrintf("leader %d lost connection with node %d, traceId: %d", rf.me, server, traceId)
 			atomic.AddInt32(netFailed, 1)
@@ -583,7 +584,6 @@ func sendAppendEntryRPC(rf *Raft, server int, rpcFailed *int32, netFailed *int32
 			rf.matchIndex[server] = rf.nextIndex[server]-1
 			success = true
 		}
-		rf.mu.Unlock()
 	case <-time.After(RPCTtimeout):
 		DPrintf("leader %d connection with node %d timeout, traceId: %d", rf.me, server, traceId)
 		atomic.AddInt32(netFailed, 1)
@@ -597,6 +597,7 @@ return:
 	second, network failed number
  */
 func sendAppendEntryToPeers(rf *Raft) (int32, int32) {
+	rf.mu.Lock()
 	doneCh := make([]chan bool, len(rf.peers))
 	success := make([]bool, len(rf.peers))
 	var rpcFailed int32 = 0
@@ -612,7 +613,7 @@ func sendAppendEntryToPeers(rf *Raft) (int32, int32) {
 	for i,ch := range doneCh {
 		success[i] = <- ch
 	}
-	rf.mu.Lock()
+
 	if int(rpcFailed + netFailed) < (len(rf.peers)/2 + 1) {
 		var validIndex []int
 		for i,res := range success {
