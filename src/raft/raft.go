@@ -367,8 +367,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 	}
 	if reply.SUCCESS == true {
-		rf.currentTerm = args.TERM
-		rf.votedFor = -1
+		if rf.currentTerm < args.TERM {
+			rf.currentTerm = args.TERM
+			// swicth to new term, reset vote
+			rf.votedFor = -1
+		}
 		if rf.roleState != Follwer {
 			DPrintf("node %d received append entry rpc from leader %d, change to be a follower, traceId: %d", rf.me, args.LEADERID, args.TRACEID)
 			rf.roleState = Follwer
