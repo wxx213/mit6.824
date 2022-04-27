@@ -2,6 +2,8 @@ package kvraft
 
 import (
 	"com.example.mit6_824/src/labrpc"
+	"com.example.mit6_824/src/raft"
+	"time"
 )
 import "crypto/rand"
 import "math/big"
@@ -41,6 +43,23 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 func (ck *Clerk) Get(key string) string {
 
 	// You will have to modify this function.
+	arg := GetArgs{
+		Key: key,
+	}
+	reply := GetReply{}
+repeat:
+	for i:=0;i<len(ck.servers);i++ {
+		ok := ck.servers[i].Call("KVServer.Get", &arg, &reply)
+		if !ok {
+			continue
+		} else if reply.Err == OK {
+			return reply.Value
+		}
+	}
+	if reply.Err == ErrWrongLeader {
+		time.Sleep(raft.Electiontimeoutbase * time.Millisecond)
+		goto repeat
+	}
 	return ""
 }
 
@@ -56,11 +75,30 @@ func (ck *Clerk) Get(key string) string {
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
+	arg := PutAppendArgs{
+		Key: key,
+		Value: value,
+		Op: op,
+	}
+	reply := PutAppendReply{}
+repeat:
+	for i:=0;i<len(ck.servers);i++ {
+		ok := ck.servers[i].Call("KVServer.PutAppend", &arg, &reply)
+		if !ok {
+			continue
+		} else if reply.Err == OK {
+			return
+		}
+	}
+	if reply.Err == ErrWrongLeader {
+		time.Sleep(raft.Electiontimeoutbase * time.Millisecond)
+		goto repeat
+	}
 }
 
 func (ck *Clerk) Put(key string, value string) {
-	ck.PutAppend(key, value, "Put")
+	ck.PutAppend(key, value, OpPut)
 }
 func (ck *Clerk) Append(key string, value string) {
-	ck.PutAppend(key, value, "Append")
+	ck.PutAppend(key, value, OpAppend)
 }

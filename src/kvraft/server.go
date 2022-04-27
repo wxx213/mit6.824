@@ -7,6 +7,7 @@ import (
 	"com.example.mit6_824/src/raft"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 const Debug = 0
@@ -23,6 +24,9 @@ type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	KEY   string
+	VALUE string
+	OP    string // "Put" or "Append"
 }
 
 type KVServer struct {
@@ -35,15 +39,58 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
+	mapKv 	map[string]string
+	applyIndex int
 }
 
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
+	//DPrintf("server %d received Get request %+v", kv.me, args)
+	_, isleader := kv.rf.GetState()
+	if !isleader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+	kv.mu.Lock()
+	value, ok := kv.mapKv[args.Key]
+	if ok {
+		reply.Value = value
+		reply.Err = OK
+	} else {
+		reply.Err = ErrNoKey
+	}
+	kv.mu.Unlock()
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	//DPrintf("server %d received PutAppend request %+v", kv.me, args)
+	kvOp := Op{
+		KEY: args.Key,
+		VALUE: args.Value,
+		OP: args.Op,
+	}
+	index,_,isLeader := kv.rf.Start(kvOp)
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+	} else {
+		doneCh := make(chan bool)
+		go func() {
+			for  {
+				kv.mu.Lock()
+				if kv.applyIndex >= index {
+					close(doneCh)
+					kv.mu.Unlock()
+					break
+				}
+				kv.mu.Unlock()
+				time.Sleep(raft.Logapplyperiod)
+			}
+		}()
+		<- doneCh
+		reply.Err = OK
+	}
 }
 
 //
@@ -91,11 +138,32 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.maxraftstate = maxraftstate
 
 	// You may need initialization code here.
-
+	kv.mapKv = make(map[string]string)
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	// You may need initialization code here.
-
+	// go routine to operate the kv from applied log
+	go func() {
+		for m := range kv.applyCh {
+			if m.CommandValid {
+				DPrintf("server %d received log apply %+v", kv.me, m)
+				kv.mu.Lock()
+				op := m.Command.(Op)
+				if op.OP == OpPut {
+					kv.mapKv[op.KEY] = op.VALUE
+				} else if op.OP == OpAppend {
+					value,ok := kv.mapKv[op.KEY]
+					if ok {
+						kv.mapKv[op.KEY] = value + op.VALUE
+					} else {
+						kv.mapKv[op.KEY] = op.VALUE
+					}
+				}
+				kv.applyIndex = m.CommandIndex
+				kv.mu.Unlock()
+			}
+		}
+	}()
 	return kv
 }
