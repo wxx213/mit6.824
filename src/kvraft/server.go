@@ -12,6 +12,12 @@ import (
 
 const Debug = 0
 
+func init() {
+	if Debug > 0 {
+		log.SetFlags(log.Lshortfile | log.LstdFlags | log.Lmicroseconds)
+	}
+}
+
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
 		log.Printf(format, a...)
@@ -27,6 +33,7 @@ type Op struct {
 	KEY   string
 	VALUE string
 	OP    string // "Put" or "Append"
+	APPLYID int
 }
 
 type KVServer struct {
@@ -40,6 +47,7 @@ type KVServer struct {
 
 	// Your definitions here.
 	mapKv 	map[string]string
+	applyId []int
 	applyIndex int
 }
 
@@ -63,18 +71,43 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	kv.mu.Unlock()
 }
 
+func findApplyId(applyids []int, id int) bool {
+	for _,applyId := range applyids {
+		if applyId == id {
+			return true
+		}
+	}
+	return false
+}
+
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
 	//DPrintf("server %d received PutAppend request %+v", kv.me, args)
+
+	_, leader := kv.rf.GetState()
+	kv.mu.Lock()
+	exist := findApplyId(kv.applyId, args.ApplyId)
+	if exist && leader {
+		kv.mu.Unlock()
+		DPrintf("traceid: %d leader %d already reveived PutAppend request %+v", args.TraceId, kv.me, args)
+		reply.Err = OK
+		return
+	} else if leader {
+		DPrintf("applyId %d not exist in leader %d applyIds %v", args.ApplyId, kv.me, kv.applyId)
+	}
+	kv.mu.Unlock()
+
 	kvOp := Op{
 		KEY: args.Key,
 		VALUE: args.Value,
 		OP: args.Op,
+		APPLYID: args.ApplyId,
 	}
-	index,_,isLeader := kv.rf.Start(kvOp)
+	index,term,isLeader := kv.rf.Start(kvOp)
 	if !isLeader {
 		reply.Err = ErrWrongLeader
 	} else {
+		DPrintf("traceid: %d leader %d reveived PutAppend request %+v, index: %d, term: %d", args.TraceId, kv.me, args, index, term)
 		doneCh := make(chan bool)
 		go func() {
 			for  {
@@ -90,6 +123,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		}()
 		<- doneCh
 		reply.Err = OK
+		DPrintf("traceid: %d leader %d resolved PutAppend request %+v, index: %d, term: %d", args.TraceId, kv.me, args, index, term)
 	}
 }
 
@@ -160,6 +194,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 						kv.mapKv[op.KEY] = op.VALUE
 					}
 				}
+				kv.applyId = append(kv.applyId, op.APPLYID)
 				kv.applyIndex = m.CommandIndex
 				kv.mu.Unlock()
 			}

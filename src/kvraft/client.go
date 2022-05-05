@@ -75,19 +75,27 @@ repeat:
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
+	applyId := (int)(nrand())
 	arg := PutAppendArgs{
 		Key: key,
 		Value: value,
 		Op: op,
+		ApplyId: applyId,
 	}
 	reply := PutAppendReply{}
 repeat:
 	for i:=0;i<len(ck.servers);i++ {
+		traceId := nrand()
+		arg.TraceId = (int)(traceId);
 		ok := ck.servers[i].Call("KVServer.PutAppend", &arg, &reply)
 		if !ok {
+			DPrintf("traceid: %d client send PutAppend request %+v net error", arg.TraceId, arg)
 			continue
 		} else if reply.Err == OK {
+			DPrintf("traceid: %d client sended PutAppend request %+v",arg.TraceId,  arg)
 			return
+		} else {
+			DPrintf("traceid: %d client send PutAppend request %+v error: %+v", arg.TraceId, arg, reply.Err)
 		}
 	}
 	if reply.Err == ErrWrongLeader {
