@@ -450,6 +450,18 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
+func (rf *Raft) CheckLogExist(index int, term int) bool {
+	if index < 1 {
+		return false
+	}
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if len(rf.log) >= index && rf.log[index-1].TERM == term {
+		return true
+	}
+	return false
+}
+
 func sendRequestVoteRPC(rf *Raft, server int, grantNum *int32, netFailed *int32, ch chan bool) {
 	traceId := rand.Int()
 	args := &RequestVoteArgs{
