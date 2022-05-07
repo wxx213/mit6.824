@@ -69,6 +69,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		reply.Err = ErrNoKey
 	}
 	kv.mu.Unlock()
+	DPrintf("leader %d reveived Get request %+v, reply: %+v, traceid: %d ", kv.me, args, reply, args.TraceId)
 }
 
 func findApplyId(applyids []int, id int) bool {
@@ -80,22 +81,63 @@ func findApplyId(applyids []int, id int) bool {
 	return false
 }
 
+func waitLogApply(kv *KVServer, args *PutAppendArgs, reply *PutAppendReply, index int, term int) {
+	doneCh := make(chan bool)
+	go func() {
+		for  {
+			kv.mu.Lock()
+			if kv.applyIndex >= index {
+				if findApplyId(kv.applyId, args.ApplyId) {
+					reply.Err = OK
+				} else {
+					reply.Err = ErrWrongLeader
+				}
+				close(doneCh)
+				kv.mu.Unlock()
+				break
+			}
+			kv.mu.Unlock()
+			time.Sleep(raft.Logapplyperiod)
+			_, isLeader := kv.rf.GetState()
+			if !isLeader {
+				reply.Err = ErrWrongLeader
+				reply.Index = index
+				reply.Term = term
+				close(doneCh)
+				break
+			}
+		}
+	}()
+	<- doneCh
+}
+
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
 	//DPrintf("server %d received PutAppend request %+v", kv.me, args)
 
 	_, leader := kv.rf.GetState()
+	if !leader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+
 	kv.mu.Lock()
 	exist := findApplyId(kv.applyId, args.ApplyId)
-	if exist && leader {
-		kv.mu.Unlock()
-		DPrintf("traceid: %d leader %d already reveived PutAppend request %+v", args.TraceId, kv.me, args)
+	kv.mu.Unlock()
+	if exist{
+		//DPrintf("leader %d already reveived PutAppend request %+v, traceid: %d", kv.me, args, args.TraceId)
 		reply.Err = OK
 		return
-	} else if leader {
-		DPrintf("applyId %d not exist in leader %d applyIds %v", args.ApplyId, kv.me, kv.applyId)
 	}
-	kv.mu.Unlock()
+
+	// the request may exist in some servers.
+	// if the request exist in current leader, wait for commit.
+	// if not, continue start new request
+	if args.Index != -1 && args.Term != -1 &&
+		kv.rf.CheckLogExist(args.Index, args.Term) {
+		waitLogApply(kv, args, reply, args.Index, args.Term)
+		return
+	}
 
 	kvOp := Op{
 		KEY: args.Key,
@@ -107,23 +149,9 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	if !isLeader {
 		reply.Err = ErrWrongLeader
 	} else {
-		DPrintf("traceid: %d leader %d reveived PutAppend request %+v, index: %d, term: %d", args.TraceId, kv.me, args, index, term)
-		doneCh := make(chan bool)
-		go func() {
-			for  {
-				kv.mu.Lock()
-				if kv.applyIndex >= index {
-					close(doneCh)
-					kv.mu.Unlock()
-					break
-				}
-				kv.mu.Unlock()
-				time.Sleep(raft.Logapplyperiod)
-			}
-		}()
-		<- doneCh
-		reply.Err = OK
-		DPrintf("traceid: %d leader %d resolved PutAppend request %+v, index: %d, term: %d", args.TraceId, kv.me, args, index, term)
+		DPrintf("leader %d reveived PutAppend request %+v, index: %d, term: %d, traceid: %d ", kv.me, args, index, term, args.TraceId)
+		waitLogApply(kv, args, reply, index, term)
+		// DPrintf("leader %d resolved PutAppend request %+v, index: %d, term: %d, traceid: %d ", kv.me, args, index, term, args.TraceId)
 	}
 }
 

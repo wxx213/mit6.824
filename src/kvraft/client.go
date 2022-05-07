@@ -81,21 +81,28 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		Value: value,
 		Op: op,
 		ApplyId: applyId,
+		Index: -1,
+		Term: -1,
 	}
-	reply := PutAppendReply{}
+	reply := PutAppendReply{
+		Index: -1,
+		Term: -1,
+	}
 repeat:
 	for i:=0;i<len(ck.servers);i++ {
 		traceId := nrand()
 		arg.TraceId = (int)(traceId);
 		ok := ck.servers[i].Call("KVServer.PutAppend", &arg, &reply)
 		if !ok {
-			DPrintf("traceid: %d client send PutAppend request %+v net error", arg.TraceId, arg)
+			DPrintf("client send PutAppend request %+v net error, traceid: %d", arg, arg.TraceId)
 			continue
 		} else if reply.Err == OK {
-			DPrintf("traceid: %d client sended PutAppend request %+v",arg.TraceId,  arg)
+			//DPrintf("client sended PutAppend request %+v, traceid: %d", arg, arg.TraceId)
 			return
-		} else {
-			DPrintf("traceid: %d client send PutAppend request %+v error: %+v", arg.TraceId, arg, reply.Err)
+		} else if reply.Err == ErrWrongLeader && reply.Index != -1 && reply.Term != -1 {
+			arg.Index = reply.Index
+			arg.Term = reply.Term
+			continue repeat
 		}
 	}
 	if reply.Err == ErrWrongLeader {

@@ -20,10 +20,14 @@ type PutAppendArgs struct {
 	// otherwise RPC will break.
 	TraceId int
 	ApplyId int
+	Index int
+	Term int
 }
 
 type PutAppendReply struct {
 	Err Err
+	Index int
+	Term int
 }
 
 type GetArgs struct {
