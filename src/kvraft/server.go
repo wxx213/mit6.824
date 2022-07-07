@@ -211,18 +211,20 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 			if m.CommandValid {
 				DPrintf("server %d received log apply %+v", kv.me, m)
 				kv.mu.Lock()
-				op := m.Command.(Op)
-				if op.OP == OpPut {
-					kv.mapKv[op.KEY] = op.VALUE
-				} else if op.OP == OpAppend {
-					value,ok := kv.mapKv[op.KEY]
-					if ok {
-						kv.mapKv[op.KEY] = value + op.VALUE
-					} else {
+				op, ok := m.Command.(Op)
+				if ok {
+					if op.OP == OpPut {
 						kv.mapKv[op.KEY] = op.VALUE
+					} else if op.OP == OpAppend {
+						value,ok := kv.mapKv[op.KEY]
+						if ok {
+							kv.mapKv[op.KEY] = value + op.VALUE
+						} else {
+							kv.mapKv[op.KEY] = op.VALUE
+						}
 					}
+					kv.applyId = append(kv.applyId, op.APPLYID)
 				}
-				kv.applyId = append(kv.applyId, op.APPLYID)
 				kv.applyIndex = m.CommandIndex
 				kv.mu.Unlock()
 			}
