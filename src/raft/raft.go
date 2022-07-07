@@ -534,6 +534,17 @@ func sendRequestVoteToPeers(rf *Raft) {
 		}
 		DPrintf("node %d get vote from most node, term: %d", rf.me, rf.currentTerm)
 		rf.roleState = Leader
+
+		// add empty log to trigger old term log commit.
+		// TODO: resolve raft test failed case.
+		rf.logIndex++
+		logEntry := LogEntry{
+			INDEX: rf.logIndex,
+			TERM: rf.currentTerm,
+			COMMAND: nil,
+		}
+		rf.log = append(rf.log, logEntry)
+
 		needSendAppentEntry = true
 	} else {
 		if netFailed >= (peerNum/2 + 1) {
