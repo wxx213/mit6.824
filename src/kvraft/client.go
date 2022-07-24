@@ -2,8 +2,6 @@ package kvraft
 
 import (
 	"com.example.mit6_824/src/labrpc"
-	"com.example.mit6_824/src/raft"
-	"time"
 )
 import "crypto/rand"
 import "math/big"
@@ -47,19 +45,21 @@ func (ck *Clerk) Get(key string) string {
 		Key: key,
 	}
 	reply := GetReply{}
-repeat:
-	for i:=0;i<len(ck.servers);i++ {
-		ok := ck.servers[i].Call("KVServer.Get", &arg, &reply)
+
+	var server, i int
+	for  {
+		traceId := nrand()
+		arg.TraceId = (int)(traceId)
+		server = i % len(ck.servers)
+		i++
+		ok := ck.servers[server].Call("KVServer.Get", &arg, &reply)
 		if !ok {
 			continue
 		} else if reply.Err == OK {
 			return reply.Value
 		}
 	}
-	if reply.Err == ErrWrongLeader {
-		time.Sleep(raft.Electiontimeoutbase * time.Millisecond)
-		goto repeat
-	}
+
 	return ""
 }
 
@@ -75,39 +75,29 @@ repeat:
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
-	applyId := (int)(nrand())
+	requestId := (int)(nrand())
 	arg := PutAppendArgs{
 		Key: key,
 		Value: value,
 		Op: op,
-		ApplyId: applyId,
-		Index: -1,
-		Term: -1,
+		RequestId: requestId,
 	}
-	reply := PutAppendReply{
-		Index: -1,
-		Term: -1,
-	}
-repeat:
-	for i:=0;i<len(ck.servers);i++ {
+	reply := PutAppendReply{}
+
+	var server, i int
+	for {
 		traceId := nrand()
-		arg.TraceId = (int)(traceId);
-		ok := ck.servers[i].Call("KVServer.PutAppend", &arg, &reply)
+		arg.TraceId = (int)(traceId)
+		server = i % len(ck.servers)
+		i++
+		ok := ck.servers[server].Call("KVServer.PutAppend", &arg, &reply)
 		if !ok {
 			DPrintf("client send PutAppend request %+v net error, traceid: %d", arg, arg.TraceId)
 			continue
 		} else if reply.Err == OK {
-			//DPrintf("client sended PutAppend request %+v, traceid: %d", arg, arg.TraceId)
+			DPrintf("client sended PutAppend request %+v, traceid: %d", arg, arg.TraceId)
 			return
-		} else if reply.Err == ErrWrongLeader && reply.Index != -1 && reply.Term != -1 {
-			arg.Index = reply.Index
-			arg.Term = reply.Term
-			continue repeat
 		}
-	}
-	if reply.Err == ErrWrongLeader {
-		time.Sleep(raft.Electiontimeoutbase * time.Millisecond)
-		goto repeat
 	}
 }
 

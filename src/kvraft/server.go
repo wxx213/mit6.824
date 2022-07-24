@@ -33,9 +33,12 @@ type Op struct {
 	KEY   string
 	VALUE string
 	OP    string // "Put" or "Append"
-	APPLYID int
 }
 
+type RequestRes struct {
+	index int
+	term int
+}
 type KVServer struct {
 	mu      sync.Mutex
 	me      int
@@ -47,8 +50,9 @@ type KVServer struct {
 
 	// Your definitions here.
 	mapKv 	map[string]string
-	applyId []int
-	applyIndex int
+	mapRequestRes map[int]RequestRes
+
+	lastApplyIndex int
 }
 
 
@@ -72,40 +76,31 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	DPrintf("leader %d reveived Get request %+v, reply: %+v, traceid: %d ", kv.me, args, reply, args.TraceId)
 }
 
-func findApplyId(applyids []int, id int) bool {
-	for _,applyId := range applyids {
-		if applyId == id {
-			return true
-		}
-	}
-	return false
-}
-
-func waitLogApply(kv *KVServer, args *PutAppendArgs, reply *PutAppendReply, index int, term int) {
+// Wait the log applied in current node.
+// Here I suppose the current node won't be down all the time.
+// TODO: Resolve the case where the current node down all the time.
+func waitLogApply(kv *KVServer, args *PutAppendArgs, reply *PutAppendReply, res RequestRes) {
 	doneCh := make(chan bool)
 	go func() {
 		for  {
 			kv.mu.Lock()
-			if kv.applyIndex >= index {
-				if findApplyId(kv.applyId, args.ApplyId) {
+			index := kv.lastApplyIndex
+			kv.mu.Unlock()
+
+			if index >= res.index {
+				if kv.rf.CheckLogExist(res.index, res.term) {
 					reply.Err = OK
 				} else {
+					// the log has been overrided in raft nodes. client need to retry.
+					kv.mu.Lock()
+					delete(kv.mapRequestRes, args.RequestId)
+					kv.mu.Unlock()
 					reply.Err = ErrWrongLeader
 				}
 				close(doneCh)
-				kv.mu.Unlock()
 				break
 			}
-			kv.mu.Unlock()
 			time.Sleep(raft.Logapplyperiod)
-			_, isLeader := kv.rf.GetState()
-			if !isLeader {
-				reply.Err = ErrWrongLeader
-				reply.Index = index
-				reply.Term = term
-				close(doneCh)
-				break
-			}
 		}
 	}()
 	<- doneCh
@@ -122,20 +117,10 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	}
 
 	kv.mu.Lock()
-	exist := findApplyId(kv.applyId, args.ApplyId)
+	result, exist := kv.mapRequestRes[args.RequestId]
 	kv.mu.Unlock()
 	if exist{
-		//DPrintf("leader %d already reveived PutAppend request %+v, traceid: %d", kv.me, args, args.TraceId)
-		reply.Err = OK
-		return
-	}
-
-	// the request may exist in some servers.
-	// if the request exist in current leader, wait for commit.
-	// if not, continue start new request
-	if args.Index != -1 && args.Term != -1 &&
-		kv.rf.CheckLogExist(args.Index, args.Term) {
-		waitLogApply(kv, args, reply, args.Index, args.Term)
+		waitLogApply(kv, args, reply, result)
 		return
 	}
 
@@ -143,14 +128,20 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		KEY: args.Key,
 		VALUE: args.Value,
 		OP: args.Op,
-		APPLYID: args.ApplyId,
 	}
 	index,term,isLeader := kv.rf.Start(kvOp)
 	if !isLeader {
 		reply.Err = ErrWrongLeader
 	} else {
+		res := RequestRes {
+			index: index,
+			term: term,
+		}
+		kv.mu.Lock()
+		kv.mapRequestRes[args.RequestId] = res
+		kv.mu.Unlock()
 		DPrintf("leader %d reveived PutAppend request %+v, index: %d, term: %d, traceid: %d ", kv.me, args, index, term, args.TraceId)
-		waitLogApply(kv, args, reply, index, term)
+		waitLogApply(kv, args, reply, res)
 		// DPrintf("leader %d resolved PutAppend request %+v, index: %d, term: %d, traceid: %d ", kv.me, args, index, term, args.TraceId)
 	}
 }
@@ -201,6 +192,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	// You may need initialization code here.
 	kv.mapKv = make(map[string]string)
+	kv.mapRequestRes = make(map[int]RequestRes)
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
@@ -223,9 +215,8 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 							kv.mapKv[op.KEY] = op.VALUE
 						}
 					}
-					kv.applyId = append(kv.applyId, op.APPLYID)
 				}
-				kv.applyIndex = m.CommandIndex
+				kv.lastApplyIndex = m.CommandIndex
 				kv.mu.Unlock()
 			}
 		}

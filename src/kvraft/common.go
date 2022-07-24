@@ -19,9 +19,7 @@ type PutAppendArgs struct {
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
 	TraceId int
-	ApplyId int
-	Index int
-	Term int
+	RequestId int
 }
 
 type PutAppendReply struct {
