@@ -41,8 +41,10 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 func (ck *Clerk) Get(key string) string {
 
 	// You will have to modify this function.
+	requestId := (int)(nrand())
 	arg := GetArgs{
 		Key: key,
+		RequestId: requestId,
 	}
 	reply := GetReply{}
 
@@ -56,6 +58,7 @@ func (ck *Clerk) Get(key string) string {
 		if !ok {
 			continue
 		} else if reply.Err == OK {
+			DPrintf("client sended Get request %+v, value: %s traceid: %d", arg, reply.Value, arg.TraceId)
 			return reply.Value
 		}
 	}

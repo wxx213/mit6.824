@@ -6,6 +6,7 @@ const (
 	ErrWrongLeader = "ErrWrongLeader"
 	OpPut            = "PUT"
 	OpAppend         = "APPEND"
+	OpGet            = "GET"
 )
 
 type Err string
@@ -32,6 +33,7 @@ type GetArgs struct {
 	Key string
 	// You'll have to add definitions here.
 	TraceId int
+	RequestId int
 }
 
 type GetReply struct {

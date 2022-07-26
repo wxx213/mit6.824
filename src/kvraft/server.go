@@ -3,6 +3,7 @@ package kvraft
 import (
 	"com.example.mit6_824/src/labgob"
 	"com.example.mit6_824/src/labrpc"
+	"errors"
 	"log"
 	"com.example.mit6_824/src/raft"
 	"sync"
@@ -33,6 +34,7 @@ type Op struct {
 	KEY   string
 	VALUE string
 	OP    string // "Put" or "Append"
+	REQUESTID int
 }
 
 type RequestRes struct {
@@ -50,8 +52,7 @@ type KVServer struct {
 
 	// Your definitions here.
 	mapKv 	map[string]string
-	mapRequestRes map[int]RequestRes
-
+	requestIds []int
 	lastApplyIndex int
 }
 
@@ -64,6 +65,27 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		reply.Err = ErrWrongLeader
 		return
 	}
+
+	kv.mu.Lock()
+	exist := findRequestIdUnlocked(kv, args.RequestId)
+	kv.mu.Unlock()
+	if !exist {
+		kvOp := Op {
+			OP: OpGet,
+			REQUESTID: args.RequestId,
+		}
+		_,_,isLeader := kv.rf.Start(kvOp)
+		if !isLeader {
+			reply.Err = ErrWrongLeader
+		} else {
+			err := waitLogApply(kv, args.RequestId)
+			if err != nil {
+				reply.Err = ErrWrongLeader
+				return
+			}
+		}
+	}
+
 	kv.mu.Lock()
 	value, ok := kv.mapKv[args.Key]
 	if ok {
@@ -77,33 +99,43 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 }
 
 // Wait the log applied in current node.
-// Here I suppose the current node won't be down all the time.
-// TODO: Resolve the case where the current node down all the time.
-func waitLogApply(kv *KVServer, args *PutAppendArgs, reply *PutAppendReply, res RequestRes) {
-	doneCh := make(chan bool)
+func waitLogApply(kv *KVServer, requestId int) error {
+	doneCh := make(chan error)
 	go func() {
+		before := time.Now()
 		for  {
+			now := time.Now()
+			if (now.Second() - before.Second()) > 10  {
+				doneCh <- errors.New("time out")
+				break
+			}
 			kv.mu.Lock()
-			index := kv.lastApplyIndex
+			exist := findRequestIdUnlocked(kv, requestId)
 			kv.mu.Unlock()
 
-			if index >= res.index {
-				if kv.rf.CheckLogExist(res.index, res.term) {
-					reply.Err = OK
-				} else {
-					// the log has been overrided in raft nodes. client need to retry.
-					kv.mu.Lock()
-					delete(kv.mapRequestRes, args.RequestId)
-					kv.mu.Unlock()
-					reply.Err = ErrWrongLeader
-				}
-				close(doneCh)
+			if exist {
+				doneCh <- nil
 				break
 			}
 			time.Sleep(raft.Logapplyperiod)
+			_, leader := kv.rf.GetState()
+			if !leader {
+				doneCh <- errors.New("leader changed")
+				break
+			}
 		}
+		close(doneCh)
 	}()
-	<- doneCh
+	return <- doneCh
+}
+
+func findRequestIdUnlocked(kv *KVServer, id int) bool {
+	for _,request := range kv.requestIds {
+		if request == id {
+			return true
+		}
+	}
+	return false
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
@@ -117,32 +149,31 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	}
 
 	kv.mu.Lock()
-	result, exist := kv.mapRequestRes[args.RequestId]
+	exist := findRequestIdUnlocked(kv, args.RequestId)
 	kv.mu.Unlock()
-	if exist{
-		waitLogApply(kv, args, reply, result)
+	if exist {
+		reply.Err = OK
 		return
 	}
 
-	kvOp := Op{
+	kvOp := Op {
 		KEY: args.Key,
 		VALUE: args.Value,
 		OP: args.Op,
+		REQUESTID: args.RequestId,
 	}
 	index,term,isLeader := kv.rf.Start(kvOp)
 	if !isLeader {
 		reply.Err = ErrWrongLeader
 	} else {
-		res := RequestRes {
-			index: index,
-			term: term,
+		DPrintf("leader %d reveived PutAppend request %+v, index: %d, term: %d, traceid: %d ",
+			kv.me, args, index, term, args.TraceId)
+		err := waitLogApply(kv, args.RequestId)
+		if err != nil {
+			reply.Err = ErrWrongLeader
+		} else {
+			reply.Err = OK
 		}
-		kv.mu.Lock()
-		kv.mapRequestRes[args.RequestId] = res
-		kv.mu.Unlock()
-		DPrintf("leader %d reveived PutAppend request %+v, index: %d, term: %d, traceid: %d ", kv.me, args, index, term, args.TraceId)
-		waitLogApply(kv, args, reply, res)
-		// DPrintf("leader %d resolved PutAppend request %+v, index: %d, term: %d, traceid: %d ", kv.me, args, index, term, args.TraceId)
 	}
 }
 
@@ -192,7 +223,6 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	// You may need initialization code here.
 	kv.mapKv = make(map[string]string)
-	kv.mapRequestRes = make(map[int]RequestRes)
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
@@ -201,19 +231,22 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	go func() {
 		for m := range kv.applyCh {
 			if m.CommandValid {
-				DPrintf("server %d received log apply %+v", kv.me, m)
 				kv.mu.Lock()
 				op, ok := m.Command.(Op)
 				if ok {
-					if op.OP == OpPut {
-						kv.mapKv[op.KEY] = op.VALUE
-					} else if op.OP == OpAppend {
-						value,ok := kv.mapKv[op.KEY]
-						if ok {
-							kv.mapKv[op.KEY] = value + op.VALUE
-						} else {
+					if !findRequestIdUnlocked(kv, op.REQUESTID) {
+						if op.OP == OpPut {
 							kv.mapKv[op.KEY] = op.VALUE
+						} else if op.OP == OpAppend {
+							value,ok := kv.mapKv[op.KEY]
+							if ok {
+								kv.mapKv[op.KEY] = value + op.VALUE
+							} else {
+								kv.mapKv[op.KEY] = op.VALUE
+							}
 						}
+						kv.requestIds = append(kv.requestIds, op.REQUESTID)
+						DPrintf("server %d received log apply %+v", kv.me, m)
 					}
 				}
 				kv.lastApplyIndex = m.CommandIndex
