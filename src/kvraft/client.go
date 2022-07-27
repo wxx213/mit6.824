@@ -60,6 +60,9 @@ func (ck *Clerk) Get(key string) string {
 		} else if reply.Err == OK {
 			DPrintf("client sended Get request %+v, value: %s traceid: %d", arg, reply.Value, arg.TraceId)
 			return reply.Value
+		} else if reply.Err == ErrNoKey {
+			reply.Value = ""
+			return reply.Value
 		}
 	}
 
